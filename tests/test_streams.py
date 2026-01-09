@@ -10,45 +10,52 @@ from sprites.async_session import AsyncKillStream
 from sprites.async_services import AsyncServiceStream
 
 
-class TestKillStream:
-    def test_iteration(self):
-        messages = [
-            StreamMessage(type="info", data="Sending signal"),
-            StreamMessage(type="info", data="Process terminated"),
-        ]
+# Shared test data
+def make_stream_messages():
+    """Create test StreamMessage list."""
+    return [
+        StreamMessage(type="info", data="msg1"),
+        StreamMessage(type="info", data="msg2"),
+    ]
+
+
+def make_service_events():
+    """Create test ServiceLogEvent list."""
+    return [
+        ServiceLogEvent(type="started"),
+        ServiceLogEvent(type="stdout", data="Hello"),
+        ServiceLogEvent(type="exit", exit_code=0),
+    ]
+
+
+# Sync stream tests
+class TestSyncStreams:
+    """Tests for synchronous stream classes."""
+
+    def test_kill_stream_iteration(self):
+        messages = make_stream_messages()
         stream = KillStream(messages)
 
         result = list(stream)
         assert len(result) == 2
-        assert result[0].type == "info"
-        assert result[0].data == "Sending signal"
+        assert result[0].data == "msg1"
+        assert result[1].data == "msg2"
 
-    def test_context_manager(self):
-        messages = [StreamMessage(type="done")]
-        with KillStream(messages) as stream:
+    def test_kill_stream_context_manager(self):
+        with KillStream([StreamMessage(type="done")]) as stream:
             result = list(stream)
             assert len(result) == 1
 
-    def test_process_all(self):
-        messages = [
-            StreamMessage(type="info", data="msg1"),
-            StreamMessage(type="info", data="msg2"),
-        ]
+    def test_kill_stream_process_all(self):
+        messages = make_stream_messages()
         stream = KillStream(messages)
 
         collected = []
         stream.process_all(lambda m: collected.append(m.data))
-
         assert collected == ["msg1", "msg2"]
 
-
-class TestServiceStream:
-    def test_iteration(self):
-        events = [
-            ServiceLogEvent(type="started"),
-            ServiceLogEvent(type="stdout", data="Hello"),
-            ServiceLogEvent(type="exit", exit_code=0),
-        ]
+    def test_service_stream_iteration(self):
+        events = make_service_events()
         stream = ServiceStream(events)
 
         result = list(stream)
@@ -57,102 +64,65 @@ class TestServiceStream:
         assert result[1].data == "Hello"
         assert result[2].exit_code == 0
 
-    def test_context_manager(self):
-        events = [ServiceLogEvent(type="done")]
-        with ServiceStream(events) as stream:
+    def test_service_stream_context_manager(self):
+        with ServiceStream([ServiceLogEvent(type="done")]) as stream:
             result = list(stream)
             assert len(result) == 1
 
 
-class TestAsyncCheckpointStream:
+# Async stream tests - parameterized where possible
+ASYNC_STREAM_MESSAGE_CLASSES = [
+    pytest.param(AsyncCheckpointStream, id="checkpoint"),
+    pytest.param(AsyncRestoreStream, id="restore"),
+    pytest.param(AsyncKillStream, id="kill"),
+]
+
+
+@pytest.mark.parametrize("StreamClass", ASYNC_STREAM_MESSAGE_CLASSES)
+class TestAsyncMessageStreams:
+    """Tests for async streams that use StreamMessage."""
+
     @pytest.mark.asyncio
-    async def test_async_iteration(self):
-        messages = [
-            StreamMessage(type="info", data="Creating checkpoint"),
-            StreamMessage(type="done"),
-        ]
-        stream = AsyncCheckpointStream(messages)
+    async def test_async_iteration(self, StreamClass):
+        messages = make_stream_messages()
+        stream = StreamClass(messages)
 
         result = []
         async for msg in stream:
             result.append(msg)
 
         assert len(result) == 2
-        assert result[0].type == "info"
-        assert result[1].type == "done"
+        assert result[0].data == "msg1"
+        assert result[1].data == "msg2"
 
     @pytest.mark.asyncio
-    async def test_async_context_manager(self):
-        messages = [StreamMessage(type="done")]
-        async with AsyncCheckpointStream(messages) as stream:
+    async def test_async_context_manager(self, StreamClass):
+        async with StreamClass([StreamMessage(type="done")]) as stream:
             result = []
             async for msg in stream:
                 result.append(msg)
             assert len(result) == 1
 
 
-class TestAsyncRestoreStream:
-    @pytest.mark.asyncio
-    async def test_async_iteration(self):
-        messages = [
-            StreamMessage(type="info", data="Restoring"),
-            StreamMessage(type="done"),
-        ]
-        stream = AsyncRestoreStream(messages)
-
-        result = []
-        async for msg in stream:
-            result.append(msg)
-
-        assert len(result) == 2
-
-    @pytest.mark.asyncio
-    async def test_async_context_manager(self):
-        messages = [StreamMessage(type="done")]
-        async with AsyncRestoreStream(messages) as stream:
-            result = []
-            async for msg in stream:
-                result.append(msg)
-            assert len(result) == 1
-
-
-class TestAsyncKillStream:
-    @pytest.mark.asyncio
-    async def test_async_iteration(self):
-        messages = [
-            StreamMessage(type="info", data="Sending signal"),
-            StreamMessage(type="done"),
-        ]
-        stream = AsyncKillStream(messages)
-
-        result = []
-        async for msg in stream:
-            result.append(msg)
-
-        assert len(result) == 2
+class TestAsyncKillStreamExtra:
+    """Additional tests specific to AsyncKillStream."""
 
     @pytest.mark.asyncio
     async def test_process_all(self):
-        messages = [
-            StreamMessage(type="info", data="msg1"),
-            StreamMessage(type="info", data="msg2"),
-        ]
+        messages = make_stream_messages()
         stream = AsyncKillStream(messages)
 
         collected = []
         await stream.process_all(lambda m: collected.append(m.data))
-
         assert collected == ["msg1", "msg2"]
 
 
 class TestAsyncServiceStream:
+    """Tests for AsyncServiceStream."""
+
     @pytest.mark.asyncio
     async def test_async_iteration(self):
-        events = [
-            ServiceLogEvent(type="started"),
-            ServiceLogEvent(type="stdout", data="Hello"),
-            ServiceLogEvent(type="exit", exit_code=0),
-        ]
+        events = make_service_events()
         stream = AsyncServiceStream(events)
 
         result = []
@@ -166,8 +136,7 @@ class TestAsyncServiceStream:
 
     @pytest.mark.asyncio
     async def test_async_context_manager(self):
-        events = [ServiceLogEvent(type="done")]
-        async with AsyncServiceStream(events) as stream:
+        async with AsyncServiceStream([ServiceLogEvent(type="done")]) as stream:
             result = []
             async for event in stream:
                 result.append(event)
@@ -183,5 +152,4 @@ class TestAsyncServiceStream:
 
         collected = []
         await stream.process_all(lambda e: collected.append(e.data))
-
         assert collected == ["line1", "line2"]
