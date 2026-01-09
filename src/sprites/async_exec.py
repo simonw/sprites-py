@@ -1,4 +1,4 @@
-"""Command execution for Sprites."""
+"""Async command execution for Sprites."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ from typing import TYPE_CHECKING, BinaryIO, Callable
 from sprites.exceptions import ExitError, TimeoutError
 
 if TYPE_CHECKING:
-    from sprites.sprite import Sprite
+    from sprites.async_sprite import AsyncSprite
 
 
 @dataclass
-class CompletedProcess:
-    """Result of a completed command (mirrors subprocess.CompletedProcess)."""
+class AsyncCompletedProcess:
+    """Result of a completed async command (mirrors subprocess.CompletedProcess)."""
 
     args: list[str]
     returncode: int
@@ -22,15 +22,15 @@ class CompletedProcess:
     stderr: bytes | None = None
 
 
-class Cmd:
-    """Represents a command to be run on a sprite.
+class AsyncCmd:
+    """Represents an async command to be run on a sprite.
 
-    This class mirrors Go's exec.Cmd API for compatibility with the SDK patterns.
+    This class provides a native async interface for command execution.
     """
 
     def __init__(
         self,
-        sprite: Sprite,
+        sprite: AsyncSprite,
         args: list[str],
         *,
         env: dict[str, str] | None = None,
@@ -44,7 +44,7 @@ class Cmd:
         session_id: str | None = None,
         timeout: float | None = None,
     ):
-        """Initialize a command.
+        """Initialize an async command.
 
         Args:
             sprite: The sprite to execute the command on.
@@ -95,19 +95,19 @@ class Cmd:
         self.tty_rows = rows
         self.tty_cols = cols
 
-    def run(self) -> None:
-        """Start command and wait for completion (like exec.Cmd.Run).
+    async def run(self) -> None:
+        """Start command and wait for completion asynchronously.
 
         Raises:
             ExitError: If the command exits with non-zero status.
             TimeoutError: If the command times out.
         """
-        code = self._run_sync()
+        code = await self._run_async()
         if code != 0:
             raise ExitError(code, self._stdout_data, self._stderr_data)
 
-    def output(self) -> bytes:
-        """Run command and return stdout (like exec.Cmd.Output).
+    async def output(self) -> bytes:
+        """Run command and return stdout asynchronously.
 
         Returns:
             The stdout output from the command.
@@ -121,15 +121,15 @@ class Cmd:
             raise RuntimeError("stdout already set")
 
         self._capture_stdout = True
-        code = self._run_sync()
+        code = await self._run_async()
 
         if code != 0:
             raise ExitError(code, self._stdout_data, self._stderr_data)
 
         return self._stdout_data
 
-    def combined_output(self) -> bytes:
-        """Run command and return combined stdout/stderr.
+    async def combined_output(self) -> bytes:
+        """Run command and return combined stdout/stderr asynchronously.
 
         Returns:
             The combined stdout and stderr output.
@@ -146,7 +146,7 @@ class Cmd:
 
         self._capture_stdout = True
         self._capture_stderr = True
-        code = self._run_sync()
+        code = await self._run_async()
 
         # For combined output, merge stdout and stderr
         combined = self._stdout_data + self._stderr_data
@@ -156,46 +156,27 @@ class Cmd:
 
         return combined
 
-    def _run_sync(self) -> int:
-        """Run the command synchronously and return exit code."""
+    async def _run_async(self) -> int:
+        """Run the command asynchronously and return exit code."""
         if self._started:
             raise RuntimeError("command already started")
         self._started = True
 
         try:
-            # Get or create event loop
-            try:
-                asyncio.get_running_loop()
-                # We're already in an async context - need to run in new thread
-                import concurrent.futures
+            from sprites.websocket import run_ws_command_async
 
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(self._run_in_new_loop)
-                    return future.result()
-            except RuntimeError:
-                # No running loop - we can create one
-                return asyncio.run(self._run_async())
+            if self.timeout is not None and self.timeout > 0:
+                try:
+                    async with asyncio.timeout(self.timeout):
+                        return await run_ws_command_async(self)
+                except asyncio.TimeoutError:
+                    raise TimeoutError(
+                        f"command timed out after {self.timeout}s", timeout=self.timeout
+                    ) from None
+            else:
+                return await run_ws_command_async(self)
         finally:
             self._finished = True
-
-    def _run_in_new_loop(self) -> int:
-        """Run the command in a new event loop."""
-        return asyncio.run(self._run_async())
-
-    async def _run_async(self) -> int:
-        """Run the command asynchronously."""
-        from sprites.websocket import run_ws_command
-
-        if self.timeout is not None and self.timeout > 0:
-            try:
-                async with asyncio.timeout(self.timeout):
-                    return await run_ws_command(self)
-            except asyncio.TimeoutError:
-                raise TimeoutError(
-                    f"command timed out after {self.timeout}s", timeout=self.timeout
-                ) from None
-        else:
-            return await run_ws_command(self)
 
     @property
     def exit_code(self) -> int:
@@ -203,8 +184,8 @@ class Cmd:
         return self._exit_code
 
 
-def run(
-    sprite: Sprite,
+async def async_run(
+    sprite: AsyncSprite,
     *args: str,
     capture_output: bool = False,
     timeout: float | None = None,
@@ -214,8 +195,8 @@ def run(
     tty: bool = False,
     tty_rows: int = 24,
     tty_cols: int = 80,
-) -> CompletedProcess:
-    """Run a command on the sprite (subprocess.run style).
+) -> AsyncCompletedProcess:
+    """Run a command on the sprite asynchronously.
 
     Args:
         sprite: The sprite to execute on.
@@ -230,13 +211,13 @@ def run(
         tty_cols: Terminal columns.
 
     Returns:
-        CompletedProcess with results.
+        AsyncCompletedProcess with results.
 
     Raises:
         ExitError: If check=True and command returns non-zero.
         TimeoutError: If command times out.
     """
-    cmd = Cmd(
+    cmd = AsyncCmd(
         sprite,
         list(args),
         env=env,
@@ -251,12 +232,9 @@ def run(
         cmd._capture_stdout = True
         cmd._capture_stderr = True
 
-    try:
-        code = cmd._run_sync()
-    except TimeoutError:
-        raise
+    code = await cmd._run_async()
 
-    result = CompletedProcess(
+    result = AsyncCompletedProcess(
         args=list(args),
         returncode=code,
         stdout=cmd._stdout_data if capture_output else None,

@@ -1,27 +1,24 @@
-"""Sprite class representing a remote sprite instance."""
+"""AsyncSprite class representing a remote sprite instance with async operations."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, BinaryIO
+from typing import TYPE_CHECKING, AsyncIterator, BinaryIO
 
-from sprites.exec import Cmd, CompletedProcess, run
+from sprites.async_exec import AsyncCmd, AsyncCompletedProcess, async_run
 from sprites.types import SpriteInfo
 
 if TYPE_CHECKING:
-    from sprites.checkpoint import CheckpointStream, RestoreStream
-    from sprites.client import SpritesClient
-    from sprites.services import ServiceStream
-    from sprites.session import KillStream
+    from sprites.client import AsyncSpritesClient
     from sprites.types import Checkpoint, NetworkPolicy, ServiceWithState, Session
 
 
 @dataclass
-class Sprite:
-    """Represents a sprite instance."""
+class AsyncSprite:
+    """Represents a sprite instance with async operations."""
 
     name: str
-    client: SpritesClient
+    client: AsyncSpritesClient
     info: SpriteInfo | None = None
 
     def command(
@@ -36,8 +33,8 @@ class Sprite:
         tty_rows: int = 24,
         tty_cols: int = 80,
         timeout: float | None = None,
-    ) -> Cmd:
-        """Create a command to run on this sprite (Go SDK style).
+    ) -> AsyncCmd:
+        """Create an async command to run on this sprite.
 
         Args:
             *args: Command and arguments (first arg is the command name).
@@ -52,9 +49,9 @@ class Sprite:
             timeout: Command timeout in seconds.
 
         Returns:
-            A Cmd object that can be used to execute the command.
+            An AsyncCmd object that can be used to execute the command.
         """
-        return Cmd(
+        return AsyncCmd(
             sprite=self,
             args=list(args),
             env=env,
@@ -68,7 +65,7 @@ class Sprite:
             timeout=timeout,
         )
 
-    def run(
+    async def run(
         self,
         *args: str,
         capture_output: bool = False,
@@ -79,8 +76,8 @@ class Sprite:
         tty: bool = False,
         tty_rows: int = 24,
         tty_cols: int = 80,
-    ) -> CompletedProcess:
-        """Run a command and wait for completion (subprocess.run style).
+    ) -> AsyncCompletedProcess:
+        """Run a command and wait for completion asynchronously.
 
         Args:
             *args: Command and arguments.
@@ -94,9 +91,9 @@ class Sprite:
             tty_cols: Terminal columns.
 
         Returns:
-            CompletedProcess with results.
+            AsyncCompletedProcess with results.
         """
-        return run(
+        return await async_run(
             self,
             *args,
             capture_output=capture_output,
@@ -117,8 +114,8 @@ class Sprite:
         stdout: BinaryIO | None = None,
         stderr: BinaryIO | None = None,
         timeout: float | None = None,
-    ) -> Cmd:
-        """Attach to an existing session.
+    ) -> AsyncCmd:
+        """Attach to an existing session asynchronously.
 
         Args:
             session_id: The ID of the session to attach to.
@@ -128,9 +125,9 @@ class Sprite:
             timeout: Command timeout in seconds.
 
         Returns:
-            A Cmd object for the attached session.
+            An AsyncCmd object for the attached session.
         """
-        return Cmd(
+        return AsyncCmd(
             sprite=self,
             args=[],
             session_id=session_id,
@@ -140,17 +137,17 @@ class Sprite:
             timeout=timeout,
         )
 
-    def delete(self) -> None:
+    async def delete(self) -> None:
         """Delete this sprite."""
-        self.client.delete_sprite(self.name)
+        await self.client.delete_sprite(self.name)
 
-    def destroy(self) -> None:
+    async def destroy(self) -> None:
         """Destroy this sprite (alias for delete)."""
-        self.delete()
+        await self.delete()
 
     # Checkpoint operations
 
-    def list_checkpoints(self, history_filter: str = "") -> list[Checkpoint]:
+    async def list_checkpoints(self, history_filter: str = "") -> list[Checkpoint]:
         """List all checkpoints for this sprite.
 
         Args:
@@ -159,11 +156,11 @@ class Sprite:
         Returns:
             List of checkpoint objects.
         """
-        from sprites.checkpoint import list_checkpoints
+        from sprites.async_checkpoint import async_list_checkpoints
 
-        return list_checkpoints(self, history_filter)
+        return await async_list_checkpoints(self, history_filter)
 
-    def get_checkpoint(self, checkpoint_id: str) -> Checkpoint:
+    async def get_checkpoint(self, checkpoint_id: str) -> Checkpoint:
         """Get a specific checkpoint.
 
         Args:
@@ -172,76 +169,76 @@ class Sprite:
         Returns:
             The checkpoint object.
         """
-        from sprites.checkpoint import get_checkpoint
+        from sprites.async_checkpoint import async_get_checkpoint
 
-        return get_checkpoint(self, checkpoint_id)
+        return await async_get_checkpoint(self, checkpoint_id)
 
-    def create_checkpoint(self, comment: str = "") -> CheckpointStream:
+    async def create_checkpoint(self, comment: str = "") -> AsyncIterator:
         """Create a new checkpoint.
 
         Args:
             comment: Optional comment for the checkpoint.
 
         Returns:
-            A stream of checkpoint creation messages.
+            An async iterator of checkpoint creation messages.
         """
-        from sprites.checkpoint import create_checkpoint
+        from sprites.async_checkpoint import async_create_checkpoint
 
-        return create_checkpoint(self, comment)
+        return await async_create_checkpoint(self, comment)
 
-    def restore_checkpoint(self, checkpoint_id: str) -> RestoreStream:
+    async def restore_checkpoint(self, checkpoint_id: str) -> AsyncIterator:
         """Restore a checkpoint.
 
         Args:
             checkpoint_id: The ID of the checkpoint to restore.
 
         Returns:
-            A stream of restore messages.
+            An async iterator of restore messages.
         """
-        from sprites.checkpoint import restore_checkpoint
+        from sprites.async_checkpoint import async_restore_checkpoint
 
-        return restore_checkpoint(self, checkpoint_id)
+        return await async_restore_checkpoint(self, checkpoint_id)
 
     # Network policy operations
 
-    def get_network_policy(self) -> NetworkPolicy:
+    async def get_network_policy(self) -> NetworkPolicy:
         """Get the current network policy.
 
         Returns:
             The network policy for this sprite.
         """
-        from sprites.policy import get_network_policy
+        from sprites.async_policy import async_get_network_policy
 
-        return get_network_policy(self)
+        return await async_get_network_policy(self)
 
-    def update_network_policy(self, policy: NetworkPolicy) -> None:
+    async def update_network_policy(self, policy: NetworkPolicy) -> None:
         """Update the network policy.
 
         Args:
             policy: The new network policy to set.
         """
-        from sprites.policy import update_network_policy
+        from sprites.async_policy import async_update_network_policy
 
-        update_network_policy(self, policy)
+        await async_update_network_policy(self, policy)
 
     # Session operations
 
-    def list_sessions(self) -> list[Session]:
+    async def list_sessions(self) -> list[Session]:
         """List active sessions for this sprite.
 
         Returns:
             List of active sessions.
         """
-        from sprites.session import list_sessions
+        from sprites.async_session import async_list_sessions
 
-        return list_sessions(self)
+        return await async_list_sessions(self)
 
-    def kill_session(
+    async def kill_session(
         self,
         session_id: str,
         signal: str = "SIGTERM",
         timeout: int = 10,
-    ) -> KillStream:
+    ) -> AsyncIterator:
         """Kill a session.
 
         Args:
@@ -250,25 +247,25 @@ class Sprite:
             timeout: Timeout in seconds before force kill (default: 10).
 
         Returns:
-            A stream of kill progress messages.
+            An async iterator of kill progress messages.
         """
-        from sprites.session import kill_session
+        from sprites.async_session import async_kill_session
 
-        return kill_session(self, session_id, signal, timeout)
+        return await async_kill_session(self, session_id, signal, timeout)
 
     # Service operations
 
-    def list_services(self) -> list[ServiceWithState]:
+    async def list_services(self) -> list[ServiceWithState]:
         """List all services for this sprite.
 
         Returns:
             List of services with their state.
         """
-        from sprites.services import list_services
+        from sprites.async_services import async_list_services
 
-        return list_services(self)
+        return await async_list_services(self)
 
-    def get_service(self, name: str) -> ServiceWithState:
+    async def get_service(self, name: str) -> ServiceWithState:
         """Get a specific service.
 
         Args:
@@ -277,11 +274,11 @@ class Sprite:
         Returns:
             The service with its state.
         """
-        from sprites.services import get_service
+        from sprites.async_services import async_get_service
 
-        return get_service(self, name)
+        return await async_get_service(self, name)
 
-    def create_service(
+    async def create_service(
         self,
         name: str,
         cmd: str,
@@ -289,7 +286,7 @@ class Sprite:
         needs: list[str] | None = None,
         http_port: int | None = None,
         duration: float | None = None,
-    ) -> ServiceStream:
+    ) -> AsyncIterator:
         """Create or update a service.
 
         Args:
@@ -301,27 +298,27 @@ class Sprite:
             duration: Monitoring duration in seconds.
 
         Returns:
-            A stream of service log events.
+            An async iterator of service log events.
         """
-        from sprites.services import create_service
+        from sprites.async_services import async_create_service
 
-        return create_service(self, name, cmd, args, needs, http_port, duration)
+        return await async_create_service(self, name, cmd, args, needs, http_port, duration)
 
-    def delete_service(self, name: str) -> None:
+    async def delete_service(self, name: str) -> None:
         """Delete a service.
 
         Args:
             name: The name of the service.
         """
-        from sprites.services import delete_service
+        from sprites.async_services import async_delete_service
 
-        delete_service(self, name)
+        await async_delete_service(self, name)
 
-    def start_service(
+    async def start_service(
         self,
         name: str,
         duration: float | None = None,
-    ) -> ServiceStream:
+    ) -> AsyncIterator:
         """Start a service.
 
         Args:
@@ -329,17 +326,17 @@ class Sprite:
             duration: Monitoring duration in seconds.
 
         Returns:
-            A stream of service log events.
+            An async iterator of service log events.
         """
-        from sprites.services import start_service
+        from sprites.async_services import async_start_service
 
-        return start_service(self, name, duration)
+        return await async_start_service(self, name, duration)
 
-    def stop_service(
+    async def stop_service(
         self,
         name: str,
         timeout: float | None = None,
-    ) -> ServiceStream:
+    ) -> AsyncIterator:
         """Stop a service.
 
         Args:
@@ -347,19 +344,19 @@ class Sprite:
             timeout: Timeout in seconds before force stop.
 
         Returns:
-            A stream of service log events.
+            An async iterator of service log events.
         """
-        from sprites.services import stop_service
+        from sprites.async_services import async_stop_service
 
-        return stop_service(self, name, timeout)
+        return await async_stop_service(self, name, timeout)
 
-    def signal_service(self, name: str, signal: str) -> None:
+    async def signal_service(self, name: str, signal: str) -> None:
         """Send a signal to a running service.
 
         Args:
             name: The name of the service.
             signal: The signal to send (e.g., "SIGTERM", "SIGHUP").
         """
-        from sprites.services import signal_service
+        from sprites.async_services import async_signal_service
 
-        signal_service(self, name, signal)
+        await async_signal_service(self, name, signal)

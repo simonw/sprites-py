@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 from enum import IntEnum
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 from urllib.parse import urlencode
 
 import websockets
 from websockets.exceptions import ConnectionClosed
 
 if TYPE_CHECKING:
+    from sprites.async_exec import AsyncCmd
     from sprites.exec import Cmd
 
 
@@ -30,14 +31,82 @@ WS_PING_INTERVAL = 15  # seconds
 WS_PONG_WAIT = 45  # seconds
 
 
+class CmdLike(Protocol):
+    """Protocol for command-like objects (both sync Cmd and AsyncCmd)."""
+
+    sprite: Any
+    args: list[str]
+    env: dict[str, str]
+    dir: str | None
+    stdin: Any
+    stdout: Any
+    stderr: Any
+    tty: bool
+    tty_rows: int
+    tty_cols: int
+    session_id: str | None
+    _text_message_handler: Callable[[bytes], None] | None
+    _capture_stdout: bool
+    _capture_stderr: bool
+    _stdout_data: bytes
+    _stderr_data: bytes
+
+
+def build_websocket_url(cmd: CmdLike) -> str:
+    """Build the WebSocket URL with query parameters."""
+    base_url = cmd.sprite.client.base_url
+
+    # Convert HTTP(S) to WS(S)
+    if base_url.startswith("https"):
+        base_url = "wss" + base_url[5:]
+    elif base_url.startswith("http"):
+        base_url = "ws" + base_url[4:]
+
+    # Build path
+    if cmd.session_id:
+        path = f"/v1/sprites/{cmd.sprite.name}/exec/{cmd.session_id}"
+    else:
+        path = f"/v1/sprites/{cmd.sprite.name}/exec"
+
+    # Build query params
+    params: list[tuple[str, str]] = []
+
+    # Command args (only for new commands)
+    if not cmd.session_id:
+        for arg in cmd.args:
+            params.append(("cmd", arg))
+        if cmd.args:
+            params.append(("path", cmd.args[0]))
+
+    # Environment variables
+    for key, value in cmd.env.items():
+        params.append(("env", f"{key}={value}"))
+
+    # Working directory
+    if cmd.dir:
+        params.append(("dir", cmd.dir))
+
+    # TTY settings
+    if cmd.tty:
+        params.append(("tty", "true"))
+        params.append(("rows", str(cmd.tty_rows)))
+        params.append(("cols", str(cmd.tty_cols)))
+
+    # Stdin indicator - always true for now
+    params.append(("stdin", "true"))
+
+    query = urlencode(params)
+    return f"{base_url}{path}?{query}"
+
+
 class WSCommand:
     """WebSocket command execution handler."""
 
-    def __init__(self, cmd: Cmd):
+    def __init__(self, cmd: CmdLike):
         """Initialize a WebSocket command handler.
 
         Args:
-            cmd: The Cmd instance to execute.
+            cmd: The Cmd or AsyncCmd instance to execute.
         """
         self.cmd = cmd
         self.ws: websockets.WebSocketClientProtocol | None = None
@@ -50,59 +119,13 @@ class WSCommand:
         self._stderr_buffer: bytearray = bytearray()
         self._io_task: asyncio.Task[None] | None = None
 
-    def _build_websocket_url(self) -> str:
-        """Build the WebSocket URL with query parameters."""
-        base_url = self.cmd.sprite.client.base_url
-
-        # Convert HTTP(S) to WS(S)
-        if base_url.startswith("https"):
-            base_url = "wss" + base_url[5:]
-        elif base_url.startswith("http"):
-            base_url = "ws" + base_url[4:]
-
-        # Build path
-        if self.cmd.session_id:
-            path = f"/v1/sprites/{self.cmd.sprite.name}/exec/{self.cmd.session_id}"
-        else:
-            path = f"/v1/sprites/{self.cmd.sprite.name}/exec"
-
-        # Build query params
-        params: list[tuple[str, str]] = []
-
-        # Command args (only for new commands)
-        if not self.cmd.session_id:
-            for arg in self.cmd.args:
-                params.append(("cmd", arg))
-            if self.cmd.args:
-                params.append(("path", self.cmd.args[0]))
-
-        # Environment variables
-        for key, value in self.cmd.env.items():
-            params.append(("env", f"{key}={value}"))
-
-        # Working directory
-        if self.cmd.dir:
-            params.append(("dir", self.cmd.dir))
-
-        # TTY settings
-        if self.cmd.tty:
-            params.append(("tty", "true"))
-            params.append(("rows", str(self.cmd.tty_rows)))
-            params.append(("cols", str(self.cmd.tty_cols)))
-
-        # Stdin indicator - always true for now
-        params.append(("stdin", "true"))
-
-        query = urlencode(params)
-        return f"{base_url}{path}?{query}"
-
     async def start(self) -> None:
         """Start the WebSocket connection."""
         if self.started:
             raise RuntimeError("already started")
         self.started = True
 
-        url = self._build_websocket_url()
+        url = build_websocket_url(self.cmd)
         headers = {"Authorization": f"Bearer {self.cmd.sprite.client.token}"}
 
         self.ws = await websockets.connect(
@@ -282,11 +305,35 @@ class WSCommand:
         return bytes(self._stderr_buffer)
 
 
-async def run_ws_command(cmd: Cmd) -> int:
-    """Run a command via WebSocket and return exit code.
+async def run_ws_command(cmd: "Cmd") -> int:
+    """Run a sync Cmd via WebSocket and return exit code.
 
     Args:
-        cmd: The command to execute.
+        cmd: The command to execute (sync Cmd from exec module).
+
+    Returns:
+        The exit code of the command.
+    """
+    ws_cmd = WSCommand(cmd)
+    ws_cmd.text_message_handler = cmd._text_message_handler
+
+    await ws_cmd.start()
+    exit_code = await ws_cmd.wait()
+
+    # Copy buffered output if cmd is capturing
+    if cmd._capture_stdout:
+        cmd._stdout_data = ws_cmd.get_stdout()
+    if cmd._capture_stderr:
+        cmd._stderr_data = ws_cmd.get_stderr()
+
+    return exit_code
+
+
+async def run_ws_command_async(cmd: "AsyncCmd") -> int:
+    """Run an AsyncCmd via WebSocket and return exit code.
+
+    Args:
+        cmd: The async command to execute (AsyncCmd from async_exec module).
 
     Returns:
         The exit code of the command.
