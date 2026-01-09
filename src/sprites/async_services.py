@@ -1,25 +1,29 @@
-"""Service management operations for Sprites."""
+"""Async service management operations for Sprites."""
 
 from __future__ import annotations
 
-import json
-from datetime import datetime
-from typing import TYPE_CHECKING, Iterator, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Optional
 
 import httpx
 
+from sprites._base import (
+    build_auth_headers,
+    build_service_payload,
+    parse_service_log_events,
+    parse_service_with_state,
+)
 from sprites.exceptions import APIError
-from sprites.types import Service, ServiceLogEvent, ServiceState, ServiceWithState
+from sprites.types import ServiceLogEvent, ServiceWithState
 
 if TYPE_CHECKING:
-    from sprites.sprite import Sprite
+    from sprites.async_sprite import AsyncSprite
 
 
-class ServiceStream:
-    """A stream of service operation messages."""
+class AsyncServiceStream:
+    """An async stream of service operation messages."""
 
     def __init__(self, messages: list[ServiceLogEvent]):
-        """Initialize the service stream.
+        """Initialize the async service stream.
 
         Args:
             messages: Pre-fetched stream messages.
@@ -27,20 +31,20 @@ class ServiceStream:
         self._messages = messages
         self._index = 0
 
-    def __iter__(self) -> Iterator[ServiceLogEvent]:
-        """Iterate over stream messages."""
+    def __aiter__(self) -> AsyncIterator[ServiceLogEvent]:
+        """Return async iterator."""
         return self
 
-    def __next__(self) -> ServiceLogEvent:
+    async def __anext__(self) -> ServiceLogEvent:
         """Get the next message from the stream."""
         if self._index >= len(self._messages):
-            raise StopIteration
+            raise StopAsyncIteration
         msg = self._messages[self._index]
         self._index += 1
         return msg
 
-    def process_all(self, handler: callable) -> None:
-        """Process all messages with a handler function.
+    async def process_all(self, handler: callable) -> None:
+        """Process all messages with a handler function asynchronously.
 
         Args:
             handler: A function that takes a ServiceLogEvent.
@@ -48,84 +52,19 @@ class ServiceStream:
         for msg in self._messages:
             handler(msg)
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """Close the stream."""
         pass
 
-    def __enter__(self) -> ServiceStream:
+    async def __aenter__(self) -> "AsyncServiceStream":
         return self
 
-    def __exit__(self, *args: object) -> None:
-        self.close()
+    async def __aexit__(self, *args: object) -> None:
+        await self.close()
 
 
-def _parse_service_with_state(data: dict) -> ServiceWithState:
-    """Parse a service with state from API response."""
-    # Parse service definition
-    service = Service(
-        name=data.get("name", ""),
-        cmd=data.get("cmd", ""),
-        args=data.get("args", []),
-        needs=data.get("needs", []),
-        http_port=data.get("http_port"),
-    )
-
-    # Parse state if present
-    state = None
-    state_data = data.get("state")
-    if state_data:
-        started_at = None
-        started_at_str = state_data.get("started_at")
-        if started_at_str:
-            try:
-                started_at = datetime.fromisoformat(started_at_str.replace("Z", "+00:00"))
-            except ValueError:
-                pass
-
-        next_restart_at = None
-        next_restart_str = state_data.get("next_restart_at")
-        if next_restart_str:
-            try:
-                next_restart_at = datetime.fromisoformat(next_restart_str.replace("Z", "+00:00"))
-            except ValueError:
-                pass
-
-        state = ServiceState(
-            name=state_data.get("name", ""),
-            status=state_data.get("status", "unknown"),
-            pid=state_data.get("pid"),
-            started_at=started_at,
-            next_restart_at=next_restart_at,
-            error=state_data.get("error"),
-            restart_count=state_data.get("restart_count", 0),
-        )
-
-    return ServiceWithState(service=service, state=state)
-
-
-def _parse_stream_response(response_text: str) -> list[ServiceLogEvent]:
-    """Parse NDJSON stream response into ServiceLogEvent objects."""
-    messages = []
-    for line in response_text.split("\n"):
-        if line.strip():
-            try:
-                data = json.loads(line)
-                messages.append(
-                    ServiceLogEvent(
-                        type=data.get("type", ""),
-                        data=data.get("data"),
-                        exit_code=data.get("exit_code"),
-                        timestamp=data.get("timestamp"),
-                        log_files=data.get("log_files"),
-                    )
-                )
-            except json.JSONDecodeError:
-                pass
-    return messages
-
-
-def list_services(sprite: Sprite) -> list[ServiceWithState]:
-    """List all services for a sprite.
+async def async_list_services(sprite: AsyncSprite) -> list[ServiceWithState]:
+    """List all services for a sprite asynchronously.
 
     Args:
         sprite: The sprite to list services for.
@@ -139,7 +78,7 @@ def list_services(sprite: Sprite) -> list[ServiceWithState]:
     url = f"{sprite.client.base_url}/v1/sprites/{sprite.name}/services"
 
     try:
-        response = sprite.client.http_client.get(url)
+        response = await sprite.client.http_client.get(url)
     except httpx.RequestError as e:
         raise APIError(f"Failed to list services: {e}") from e
 
@@ -151,11 +90,11 @@ def list_services(sprite: Sprite) -> list[ServiceWithState]:
         )
 
     data = response.json()
-    return [_parse_service_with_state(s) for s in data]
+    return [parse_service_with_state(s) for s in data]
 
 
-def get_service(sprite: Sprite, name: str) -> ServiceWithState:
-    """Get a specific service.
+async def async_get_service(sprite: AsyncSprite, name: str) -> ServiceWithState:
+    """Get a specific service asynchronously.
 
     Args:
         sprite: The sprite.
@@ -170,7 +109,7 @@ def get_service(sprite: Sprite, name: str) -> ServiceWithState:
     url = f"{sprite.client.base_url}/v1/sprites/{sprite.name}/services/{name}"
 
     try:
-        response = sprite.client.http_client.get(url)
+        response = await sprite.client.http_client.get(url)
     except httpx.RequestError as e:
         raise APIError(f"Failed to get service: {e}") from e
 
@@ -184,19 +123,19 @@ def get_service(sprite: Sprite, name: str) -> ServiceWithState:
             response=response.text,
         )
 
-    return _parse_service_with_state(response.json())
+    return parse_service_with_state(response.json())
 
 
-def create_service(
-    sprite: Sprite,
+async def async_create_service(
+    sprite: AsyncSprite,
     name: str,
     cmd: str,
     args: Optional[list[str]] = None,
     needs: Optional[list[str]] = None,
     http_port: Optional[int] = None,
     duration: Optional[float] = None,
-) -> ServiceStream:
-    """Create or update a service.
+) -> AsyncServiceStream:
+    """Create or update a service asynchronously.
 
     Args:
         sprite: The sprite.
@@ -208,7 +147,7 @@ def create_service(
         duration: Monitoring duration in seconds.
 
     Returns:
-        A stream of service log events.
+        An async stream of service log events.
 
     Raises:
         APIError: If the API call fails.
@@ -217,20 +156,14 @@ def create_service(
     if duration:
         url += f"?duration={duration}s"
 
-    payload = {"cmd": cmd}
-    if args:
-        payload["args"] = args
-    if needs:
-        payload["needs"] = needs
-    if http_port is not None:
-        payload["http_port"] = http_port
+    payload = build_service_payload(cmd, args, needs, http_port)
 
-    with httpx.Client(
+    async with httpx.AsyncClient(
         timeout=120.0,
-        headers={"Authorization": f"Bearer {sprite.client.token}"},
+        headers=build_auth_headers(sprite.client.token),
     ) as client:
         try:
-            response = client.put(url, json=payload)
+            response = await client.put(url, json=payload)
         except httpx.RequestError as e:
             raise APIError(f"Failed to create service: {e}") from e
 
@@ -248,11 +181,11 @@ def create_service(
                 response=response.text,
             )
 
-        return ServiceStream(_parse_stream_response(response.text))
+        return AsyncServiceStream(parse_service_log_events(response.text))
 
 
-def delete_service(sprite: Sprite, name: str) -> None:
-    """Delete a service.
+async def async_delete_service(sprite: AsyncSprite, name: str) -> None:
+    """Delete a service asynchronously.
 
     Args:
         sprite: The sprite.
@@ -264,7 +197,7 @@ def delete_service(sprite: Sprite, name: str) -> None:
     url = f"{sprite.client.base_url}/v1/sprites/{sprite.name}/services/{name}"
 
     try:
-        response = sprite.client.http_client.delete(url)
+        response = await sprite.client.http_client.delete(url)
     except httpx.RequestError as e:
         raise APIError(f"Failed to delete service: {e}") from e
 
@@ -286,12 +219,12 @@ def delete_service(sprite: Sprite, name: str) -> None:
         )
 
 
-def start_service(
-    sprite: Sprite,
+async def async_start_service(
+    sprite: AsyncSprite,
     name: str,
     duration: Optional[float] = None,
-) -> ServiceStream:
-    """Start a service.
+) -> AsyncServiceStream:
+    """Start a service asynchronously.
 
     Args:
         sprite: The sprite.
@@ -299,7 +232,7 @@ def start_service(
         duration: Monitoring duration in seconds.
 
     Returns:
-        A stream of service log events.
+        An async stream of service log events.
 
     Raises:
         APIError: If the API call fails.
@@ -308,12 +241,12 @@ def start_service(
     if duration:
         url += f"?duration={duration}s"
 
-    with httpx.Client(
+    async with httpx.AsyncClient(
         timeout=120.0,
-        headers={"Authorization": f"Bearer {sprite.client.token}"},
+        headers=build_auth_headers(sprite.client.token),
     ) as client:
         try:
-            response = client.post(url)
+            response = await client.post(url)
         except httpx.RequestError as e:
             raise APIError(f"Failed to start service: {e}") from e
 
@@ -327,15 +260,15 @@ def start_service(
                 response=response.text,
             )
 
-        return ServiceStream(_parse_stream_response(response.text))
+        return AsyncServiceStream(parse_service_log_events(response.text))
 
 
-def stop_service(
-    sprite: Sprite,
+async def async_stop_service(
+    sprite: AsyncSprite,
     name: str,
     timeout: Optional[float] = None,
-) -> ServiceStream:
-    """Stop a service.
+) -> AsyncServiceStream:
+    """Stop a service asynchronously.
 
     Args:
         sprite: The sprite.
@@ -343,7 +276,7 @@ def stop_service(
         timeout: Timeout in seconds before force stop.
 
     Returns:
-        A stream of service log events.
+        An async stream of service log events.
 
     Raises:
         APIError: If the API call fails.
@@ -352,12 +285,12 @@ def stop_service(
     if timeout:
         url += f"?timeout={timeout}s"
 
-    with httpx.Client(
+    async with httpx.AsyncClient(
         timeout=120.0,
-        headers={"Authorization": f"Bearer {sprite.client.token}"},
+        headers=build_auth_headers(sprite.client.token),
     ) as client:
         try:
-            response = client.post(url)
+            response = await client.post(url)
         except httpx.RequestError as e:
             raise APIError(f"Failed to stop service: {e}") from e
 
@@ -378,11 +311,11 @@ def stop_service(
                 response=response.text,
             )
 
-        return ServiceStream(_parse_stream_response(response.text))
+        return AsyncServiceStream(parse_service_log_events(response.text))
 
 
-def signal_service(sprite: Sprite, name: str, signal: str) -> None:
-    """Send a signal to a running service.
+async def async_signal_service(sprite: AsyncSprite, name: str, signal: str) -> None:
+    """Send a signal to a running service asynchronously.
 
     Args:
         sprite: The sprite.
@@ -400,7 +333,7 @@ def signal_service(sprite: Sprite, name: str, signal: str) -> None:
     }
 
     try:
-        response = sprite.client.http_client.post(url, json=payload)
+        response = await sprite.client.http_client.post(url, json=payload)
     except httpx.RequestError as e:
         raise APIError(f"Failed to signal service: {e}") from e
 
